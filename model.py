@@ -10,6 +10,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, roc_auc_score, mean_squared_error
 from sklearn.utils.class_weight import compute_class_weight
 
+from sklearn.model_selection import ShuffleSplit
+
 import tensorflow as tf
 
 from numpy.random import seed
@@ -499,6 +501,116 @@ def make_DualADAE(X_train, Y_train, X_test, Y_test, name_dict_param, run,
                           str(latent_dim2) + 'L_lam'+ 
                           str(lambda_val) +'_fold'+ 
                           str(run) +'_6k_epochs.h5'
+    
+    with open(filename_decoder_json, "w") as json_file:
+        json_file.write(model_json)
+    
+    adv_model._decoder.save_weights(filename_decoder_h5)
+    print("Saved model to disk")
+
+    return embedding_df
+
+
+
+def make_DualADAE_crossval(X, Y, name_dict_param, run,
+                  lambda_val, n_split, iternations, n_centers, 
+                  n_scanners):
+    
+    # Importing best AE parameter
+    param_dict_name = param_path + name_dict_param
+
+    with open(param_dict_name, "r") as fp:
+        best_ae_params = json.load(fp)
+
+    latent_dim1 = best_ae_params['hidden_nodes1']
+    latent_dim2 = best_ae_params['hidden_nodes2']
+
+    # Define model
+    adv_model = DualADAE(n_features = X.shape[1], 
+                         latent_dim1 = latent_dim1,
+                         latent_dim2 = latent_dim2,
+                         lambda_val = lambda_val,
+                         random_seed = 1,
+                         n_centers = 2,
+                         n_scanners = 5)
+
+    # Split data for pretraining
+    X_train, X_test, Y_train, Y_test = train_test_split(X, Y, test_size=0.2, random_state=12345)
+    y1_train = Y_train.iloc[:,0] 
+    y2_train = Y_train.iloc[:,1]
+    y1_test = Y_test.iloc[:,0]
+    y2_test = Y_test.iloc[:,1]
+
+
+    # Pretrain both networks
+    adv_model.pretrain(X_train,
+                       y1_train,
+                       y2_train,
+                       validation_data=(X_test, y1_test, y2_test),
+                       epochs=10)
+
+    # Cross-validation training of AD-AE
+    rs = ShuffleSplit(n_splits=n_split, test_size=.2, random_state=12345)
+
+    # Iterate on splits
+    for i, (train_idx, test_idx) in enumerate(rs.split(X)):
+        X_train, Y_train, X_test, Y_test = X.iloc[train_idx,:], Y.iloc[train_idx,:], Y.iloc[test_idx,:], Y.iloc[test_idx,:]
+
+        # Train model on the given split
+
+        adv_model.fit(X_train, Y_train.iloc[:,0], Y_train.iloc[:,1],
+                validation_data=(X_test, Y_test.iloc[:,0], Y_test.iloc[:,1]),
+                T_iter = iternations)
+
+
+    # Generate embedding for all samples
+    embedding = adv_model._encoder.predict(X)
+    embedding_df = pd.DataFrame(embedding, index = X.index)
+
+    filename_embedding = adv_path_dual + 
+                         '2_layer_parallel_ADV_Embedding_' + 
+                         str(latent_dim1) + '_' + 
+                         str(latent_dim2) + 'L_lam' + 
+                         str(lambda_val) + '_fold' + 
+                         str(run) + '_crossval.csv'
+    embedding_df.to_csv(filename_embedding)
+
+    # Record models
+    model_json = adv_model._encoder.to_json()
+    filename_encoder_json = adv_path_dual + 
+                            '2_layer_parallel_ADV_encoder_' + 
+                            str(latent_dim1) + '_' + 
+                            str(latent_dim2) + 'L_lam'+ 
+                            str(lambda_val) +'_fold'+ 
+                            str(run) +'_crossval.json'
+
+    filename_encoder_h5 = adv_path_dual + 
+                          '2_layer_parallel_ADV_encoder_' + 
+                          str(latent_dim1) + '_' + 
+                          str(latent_dim2) + 'L_lam'+ 
+                          str(lambda_val) +'_fold'+ 
+                          str(run) +'_crossval.h5'
+    
+    with open(filename_encoder_json, "w") as json_file:
+        json_file.write(model_json)
+    
+    adv_model._encoder.save_weights(filename_encoder_h5)
+    print("Saved model to disk")
+     
+    model_json = adv_model._decoder.to_json()
+    filename_decoder_json = adv_path_dual + 
+                            '2_layer_parallel_ADV_decoder_' + 
+                            str(latent_dim1) + '_' + 
+                            str(latent_dim2) + 'L_lam'+ 
+                            str(lambda_val) +'_fold'+ 
+                            str(run) +'_crossval.json'
+
+    filename_decoder_h5 = adv_path_dual +
+                          '2_layer_parallel_ADV_decoder_' + 
+                          str(latent_dim1) + '_' + 
+                          str(latent_dim2) + 'L_lam'+ 
+                          str(lambda_val) +'_fold'+ 
+                          str(run) +'_crossval.h5'
     
     with open(filename_decoder_json, "w") as json_file:
         json_file.write(model_json)
